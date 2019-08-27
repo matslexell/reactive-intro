@@ -1,8 +1,14 @@
 var refreshButton = document.querySelector('.refresh');
+var closeButton1 = document.querySelector('.close1');
+var closeButton2 = document.querySelector('.close2');
+var closeButton3 = document.querySelector('.close3');
 
 var refreshClickStream = Rx.Observable.fromEvent(refreshButton, 'click');
+var close1Clicks = Rx.Observable.fromEvent(closeButton1, 'click');
+var close2Clicks = Rx.Observable.fromEvent(closeButton2, 'click');
+var close3Clicks = Rx.Observable.fromEvent(closeButton3, 'click');
 
-var startupRequestStream = Rx.Observable.just('https://api.github.com/users');
+var startupRequestStream = Rx.Observable.of('https://api.github.com/users');
 
 var requestOnRefreshStream = refreshClickStream
   .map(ev => {
@@ -10,53 +16,62 @@ var requestOnRefreshStream = refreshClickStream
     return 'https://api.github.com/users?since=' + randomOffset;
   });
 
-var responseStream = requestOnRefreshStream.merge(startupRequestStream)
-  .flatMap(requestUrl => {
-    console.log("request")
-    return Rx.Observable.fromPromise(jQuery.getJSON(requestUrl))
-  })
-  .shareReplay(1);
+var requestStream = startupRequestStream.merge(requestOnRefreshStream);
 
-function createSuggestionStream(responseStream) {
-  return responseStream.map(listUser => 
-    listUser[Math.floor(Math.random()*listUser.length)]
+var responseStream = requestStream
+  .flatMap(requestUrl =>
+    Rx.Observable.fromPromise(jQuery.getJSON(requestUrl))
   )
-  .startWith(null)
-  .merge(refreshClickStream.map(ev => null));
+  .publishReplay().refCount(1);
+
+// refreshClickStream: -------f------------->
+// requestStream:      r------r------------->
+// responseStream:     ---R-------R--------->
+// closeClickStream:   ---------------x----->
+// suggestion1Stream:  N--u---N---u---u----->
+
+function getRandomUser(listUsers) {
+  return listUsers[Math.floor(Math.random()*listUsers.length)];
 }
 
-var suggestion1Stream = createSuggestionStream(responseStream);
-var suggestion2Stream = createSuggestionStream(responseStream);
-var suggestion3Stream = createSuggestionStream(responseStream);
+function createSuggestionStream(responseStream, closeClickStream) {
+  return responseStream.map(getRandomUser)
+    .startWith(null)
+    .merge(refreshClickStream.map(ev => null))
+    .merge(
+      closeClickStream.withLatestFrom(responseStream, 
+                                  (x, R) => getRandomUser(R))
+    );
+}
 
-renderSuggestion(null, '.suggestion1');
-renderSuggestion(null, '.suggestion2');
-renderSuggestion(null, '.suggestion3');
+var suggestion1Stream = createSuggestionStream(responseStream, close1Clicks);
+var suggestion2Stream = createSuggestionStream(responseStream, close2Clicks);
+var suggestion3Stream = createSuggestionStream(responseStream, close3Clicks);
 
+// Rendering ---------------------------------------------------
 function renderSuggestion(suggestedUser, selector) {
-  var suggestedEl = document.querySelector(selector);
-  if(suggestedUser == null) {
-    suggestedEl.style.visibility = 'hidden';
-    return;
+  var suggestionEl = document.querySelector(selector);
+  if (suggestedUser === null) {
+    suggestionEl.style.visibility = 'hidden';
+  } else {
+    suggestionEl.style.visibility = 'visible';
+    var usernameEl = suggestionEl.querySelector('.username');
+    usernameEl.href = suggestedUser.html_url;
+    usernameEl.textContent = suggestedUser.login;
+    var imgEl = suggestionEl.querySelector('img');
+    imgEl.src = "";
+    imgEl.src = suggestedUser.avatar_url;
   }
-  suggestedEl.style.visibility = 'visible';
-  var usernameEl = suggestedEl.querySelector('.username');
-  usernameEl.href = suggestedUser.html_url;
-  usernameEl.textContent = suggestedUser.login;
-  var imgEl = suggestedEl.querySelector('img');
-  imgEl.src = "";
-  imgEl.src = suggestedUser.avatar_url;
 }
-
 
 suggestion1Stream.subscribe(user => {
   renderSuggestion(user, '.suggestion1');
 });
 
-// suggestion2Stream.subscribe(user => {
-//   renderSuggestion(user, '.suggestion2');
-// });
+suggestion2Stream.subscribe(user => {
+  renderSuggestion(user, '.suggestion2');
+});
 
-// suggestion3Stream.subscribe(user => {
-//   renderSuggestion(user, '.suggestion3');
-// });
+suggestion3Stream.subscribe(user => {
+  renderSuggestion(user, '.suggestion3');
+});
